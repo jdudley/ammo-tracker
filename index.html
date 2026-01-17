@@ -57,6 +57,7 @@
       const [parsedItems, setParsedItems] = useState([]);
       const [importStep, setImportStep] = useState('paste');
       const [showSettings, setShowSettings] = useState(false);
+      const [lowAmmoThreshold, setLowAmmoThreshold] = useState(50);
 
       const calibers = [
         { id: '223', name: '.223/5.56', color: '#10B981', patterns: ['223', '5.56', '5.56x45'] },
@@ -87,6 +88,10 @@
           if (saved) {
             setInventory(JSON.parse(saved));
           }
+          const savedThreshold = localStorage.getItem('ammo-low-threshold');
+          if (savedThreshold) {
+            setLowAmmoThreshold(parseInt(savedThreshold));
+          }
         } catch (e) {
           console.error('Error loading data:', e);
         }
@@ -103,6 +108,17 @@
           }
         }
       }, [inventory, isLoading]);
+
+      // Save threshold to localStorage
+      useEffect(() => {
+        if (!isLoading) {
+          try {
+            localStorage.setItem('ammo-low-threshold', lowAmmoThreshold.toString());
+          } catch (e) {
+            console.error('Error saving threshold:', e);
+          }
+        }
+      }, [lowAmmoThreshold, isLoading]);
 
       const parseImportText = (text) => {
         const items = [];
@@ -594,9 +610,23 @@
             {showSettings && (
               <div style={styles.modalOverlay} onClick={() => setShowSettings(false)}>
                 <div style={styles.confirmModal} onClick={e => e.stopPropagation()}>
-                  <div style={styles.confirmTitle}>Backup & Restore</div>
-                  <div style={{...styles.confirmMessage, marginBottom: '16px'}}>
-                    Export your inventory to a file for safekeeping, or restore from a previous backup.
+                  <div style={styles.confirmTitle}>Settings</div>
+                  
+                  <div style={{marginBottom: '24px'}}>
+                    <div style={{fontSize: '14px', color: '#A3A3A3', marginBottom: '8px'}}>Low ammo alert threshold</div>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '12px'}}>
+                      <input
+                        type="number"
+                        value={lowAmmoThreshold}
+                        onChange={(e) => setLowAmmoThreshold(Math.max(0, parseInt(e.target.value) || 0))}
+                        style={{...styles.input, marginBottom: 0, width: '100px', textAlign: 'center'}}
+                      />
+                      <span style={{color: '#737373', fontSize: '14px'}}>rounds or less</span>
+                    </div>
+                  </div>
+
+                  <div style={{borderTop: '1px solid #333', paddingTop: '20px', marginBottom: '8px'}}>
+                    <div style={{fontSize: '14px', color: '#A3A3A3', marginBottom: '12px'}}>Backup & Restore</div>
                   </div>
                   <div style={{display: 'flex', flexDirection: 'column', gap: '12px'}}>
                     <button 
@@ -618,7 +648,7 @@
                       style={{...styles.cancelBtn, padding: '16px', marginTop: '8px'}}
                       onClick={() => setShowSettings(false)}
                     >
-                      Cancel
+                      Done
                     </button>
                   </div>
                 </div>
@@ -667,7 +697,7 @@
               {calibers.map(cal => {
                 const total = getCaliberTotal(cal.id);
                 const products = getCaliberProducts(cal.id);
-                const isLow = total > 0 && total <= 50;
+                const isLow = total > 0 && total <= lowAmmoThreshold;
                 return (
                   <div 
                     key={cal.id} 
