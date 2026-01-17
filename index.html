@@ -1,0 +1,1669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Ammo Tracker">
+  <meta name="theme-color" content="#0A0A0A">
+  <title>Ammo Tracker</title>
+  
+  <!-- App Icon -->
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect fill='%230A0A0A' width='180' height='180' rx='40'/><text x='90' y='115' font-size='80' text-anchor='middle' fill='%23F59E0B'>🎯</text></svg>">
+  
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { 
+      height: 100%; 
+      background: #0A0A0A;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
+    }
+    @keyframes slideDown {
+      from { opacity: 0; transform: translate(-50%, -20px); }
+      to { opacity: 1; transform: translate(-50%, 0); }
+    }
+  </style>
+  
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const AmmoTracker = () => {
+      const [inventory, setInventory] = useState([]);
+      const [view, setView] = useState('home');
+      const [selectedCaliber, setSelectedCaliber] = useState(null);
+      const [selectedProduct, setSelectedProduct] = useState(null);
+      const [customQty, setCustomQty] = useState('');
+      const [isLoading, setIsLoading] = useState(true);
+      const [showNewProduct, setShowNewProduct] = useState(false);
+      const [newProduct, setNewProduct] = useState({ brand: '', grainWeight: '', type: 'FMJ', notes: '' });
+      const [toast, setToast] = useState(null);
+      const [deleteConfirm, setDeleteConfirm] = useState(null);
+      
+      const [importText, setImportText] = useState('');
+      const [parsedItems, setParsedItems] = useState([]);
+      const [importStep, setImportStep] = useState('paste');
+
+      const calibers = [
+        { id: '223', name: '.223/5.56', color: '#10B981', patterns: ['223', '5.56', '5.56x45'] },
+        { id: '300blk', name: '300 BLK', color: '#F59E0B', patterns: ['300 blackout', '300 blk', '300blk', '300 aac', '300aac'] },
+        { id: '308', name: '.308', color: '#EF4444', patterns: ['308', '7.62x51', '7.62 nato'] },
+        { id: '9mm', name: '9mm', color: '#3B82F6', patterns: ['9mm', '9x19', '9 mm', '9mm luger'] },
+        { id: '65cm', name: '6.5 CM', color: '#8B5CF6', patterns: ['6.5 creedmoor', '6.5mm creedmoor', '6.5 cm', '6.5cm', '6.5mm'] },
+        { id: '12ga', name: '12 Gauge', color: '#EC4899', patterns: ['12 gauge', '12gauge', '12 ga', '12ga'] },
+      ];
+
+      const ammoTypes = ['HST', 'JHP', 'HP', 'FMJ', 'OTM', 'BTHP', 'SP', 'SMK', 'Tracer', 'Subsonic', 'Match', 'V-MAX', 'ELD', 'XTP', 'Gold Dot', 'Critical Defense', 'Critical Duty'];
+      
+      const quickAddAmounts = [20, 50, 100, 200, 500, 1000];
+      
+      const boxSizes = {
+        '9mm': [20, 50, 100],
+        '223': [20, 50, 100, 200],
+        '300blk': [20, 50],
+        '308': [20, 50],
+        '65cm': [20, 50],
+        '12ga': [5, 10, 25],
+      };
+
+      // Load from localStorage
+      useEffect(() => {
+        try {
+          const saved = localStorage.getItem('ammo-inventory-v3');
+          if (saved) {
+            setInventory(JSON.parse(saved));
+          }
+        } catch (e) {
+          console.error('Error loading data:', e);
+        }
+        setIsLoading(false);
+      }, []);
+
+      // Save to localStorage
+      useEffect(() => {
+        if (!isLoading) {
+          try {
+            localStorage.setItem('ammo-inventory-v3', JSON.stringify(inventory));
+          } catch (e) {
+            console.error('Error saving data:', e);
+          }
+        }
+      }, [inventory, isLoading]);
+
+      const parseImportText = (text) => {
+        const items = [];
+        const seen = new Set();
+        
+        const productPattern = /([\d.]+(?:mm|acp)?(?:\s*(?:aac\s*)?(?:creedmoor|blackout|rem|blk|nato|acp|sw|special|win|mag|luger))?)\s*-\s*(\d+)\s*(?:gr|grain)\s+([A-Za-z0-9\s\-\/]+?)\s*-\s*([A-Za-z0-9\s\-\.&]+?)\s*-\s*(\d+)\s*(?:rounds?|rds?)/gi;
+        const qtyPattern = /QTY:\s*(\d+)/gi;
+        const qtyMatches = [...text.matchAll(qtyPattern)];
+        
+        let match;
+        while ((match = productPattern.exec(text)) !== null) {
+          const [fullMatch, rawCaliber, grainWeight, typeDesc, brand, roundsPerBox] = match;
+          const matchEnd = match.index + fullMatch.length;
+          
+          const key = `${rawCaliber}-${grainWeight}-${brand}-${roundsPerBox}`.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          
+          let qty = 1;
+          for (const qtyMatch of qtyMatches) {
+            if (qtyMatch.index > matchEnd && qtyMatch.index < matchEnd + 100) {
+              qty = parseInt(qtyMatch[1]);
+              break;
+            }
+          }
+          
+          const caliberLower = rawCaliber.toLowerCase().replace(/\s+/g, '');
+          let detectedCaliber = null;
+          
+          for (const cal of calibers) {
+            for (const pattern of cal.patterns) {
+              const patternClean = pattern.toLowerCase().replace(/\s+/g, '');
+              if (caliberLower.includes(patternClean) || patternClean.includes(caliberLower)) {
+                detectedCaliber = cal;
+                break;
+              }
+            }
+            if (detectedCaliber) break;
+          }
+          
+          if (!detectedCaliber) {
+            if (caliberLower.includes('9') && caliberLower.includes('mm')) {
+              detectedCaliber = calibers.find(c => c.id === '9mm');
+            } else if (caliberLower.includes('223') || caliberLower.includes('556') || caliberLower.includes('5.56')) {
+              detectedCaliber = calibers.find(c => c.id === '223');
+            } else if (caliberLower.includes('308') || caliberLower.includes('7.62')) {
+              detectedCaliber = calibers.find(c => c.id === '308');
+            } else if (caliberLower.includes('300') && (caliberLower.includes('blk') || caliberLower.includes('black'))) {
+              detectedCaliber = calibers.find(c => c.id === '300blk');
+            } else if (caliberLower.includes('6.5') || caliberLower.includes('creed')) {
+              detectedCaliber = calibers.find(c => c.id === '65cm');
+            }
+          }
+          
+          let detectedType = 'FMJ';
+          const typeUpper = typeDesc.toUpperCase();
+          for (const type of ammoTypes) {
+            if (typeUpper.includes(type)) {
+              detectedType = type;
+              break;
+            }
+          }
+          
+          let cleanBrand = brand.trim();
+          cleanBrand = cleanBrand.replace(/\s*(Law Enforcement|LE|Premium|Ammunition)$/i, '').trim();
+          cleanBrand = cleanBrand.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+          
+          const totalRounds = parseInt(roundsPerBox) * qty;
+          
+          items.push({
+            id: Date.now() + Math.random(),
+            rawText: fullMatch,
+            caliber: detectedCaliber?.id || 'unknown',
+            caliberName: detectedCaliber?.name || rawCaliber,
+            brand: cleanBrand,
+            grainWeight: parseInt(grainWeight),
+            type: detectedType,
+            quantity: totalRounds,
+            boxQty: qty,
+            roundsPerBox: parseInt(roundsPerBox),
+            include: detectedCaliber !== null,
+          });
+        }
+        
+        const shotgunPattern = /(12|20|16|10|28|410)\s*(?:gauge|ga)\s+-\s+(.+?)\s+-\s+([A-Za-z][A-Za-z0-9\s\-\.&]*?)\s+-\s+(\d+)\s*(?:rounds?|rds?|shells?)/gi;
+        
+        while ((match = shotgunPattern.exec(text)) !== null) {
+          const [fullMatch, gauge, shellDesc, brand, roundsPerBox] = match;
+          const matchEnd = match.index + fullMatch.length;
+          
+          const key = `${gauge}ga-${shellDesc}-${brand}-${roundsPerBox}`.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          
+          let qty = 1;
+          for (const qtyMatch of qtyMatches) {
+            if (qtyMatch.index > matchEnd && qtyMatch.index < matchEnd + 100) {
+              qty = parseInt(qtyMatch[1]);
+              break;
+            }
+          }
+          
+          const gaugeNum = gauge.toString();
+          let detectedCaliber = calibers.find(c => c.patterns.some(p => p.includes(gaugeNum + ' ga') || p.includes(gaugeNum + 'ga') || p.includes(gaugeNum + ' gauge')));
+          
+          let shellType = shellDesc.trim();
+          const buckMatch = shellDesc.match(/(#?\d+\s*buck|00\s*buck|slug|#\d+\s*shot|birdshot|buckshot)/i);
+          if (buckMatch) {
+            shellType = buckMatch[1];
+          }
+          
+          let cleanBrand = brand.trim();
+          cleanBrand = cleanBrand.replace(/\s*(Express|Premium|Ammunition|Varmint)$/i, '').trim();
+          cleanBrand = cleanBrand.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+          
+          const totalRounds = parseInt(roundsPerBox) * qty;
+          
+          items.push({
+            id: Date.now() + Math.random(),
+            rawText: fullMatch,
+            caliber: detectedCaliber?.id || 'unknown',
+            caliberName: detectedCaliber?.name || `${gauge} Gauge`,
+            brand: cleanBrand,
+            grainWeight: 0,
+            type: shellType,
+            quantity: totalRounds,
+            boxQty: qty,
+            roundsPerBox: parseInt(roundsPerBox),
+            include: detectedCaliber !== null,
+            isShotgun: true,
+          });
+        }
+        
+        return items;
+      };
+
+      const handleParseImport = () => {
+        const items = parseImportText(importText);
+        setParsedItems(items);
+        setImportStep('review');
+      };
+
+      const handleConfirmImport = () => {
+        const itemsToAdd = parsedItems.filter(item => item.include && item.caliber !== 'unknown');
+        let newInventory = [...inventory];
+        
+        for (const item of itemsToAdd) {
+          const existingIndex = newInventory.findIndex(inv => 
+            inv.caliber === item.caliber && 
+            inv.grainWeight === item.grainWeight && 
+            inv.brand.toLowerCase() === item.brand.toLowerCase() &&
+            inv.type === item.type
+          );
+          
+          if (existingIndex >= 0) {
+            newInventory[existingIndex] = {
+              ...newInventory[existingIndex],
+              quantity: newInventory[existingIndex].quantity + item.quantity
+            };
+          } else {
+            newInventory.push({
+              id: Date.now() + Math.random(),
+              caliber: item.caliber,
+              brand: item.brand,
+              grainWeight: item.grainWeight,
+              type: item.type,
+              notes: '',
+              quantity: item.quantity,
+            });
+          }
+        }
+        
+        setInventory(newInventory);
+        setImportStep('done');
+      };
+
+      const handleToggleImportItem = (itemId) => {
+        setParsedItems(parsedItems.map(item => 
+          item.id === itemId ? { ...item, include: !item.include } : item
+        ));
+      };
+
+      const handleUpdateImportItemQty = (itemId, qty) => {
+        setParsedItems(parsedItems.map(item => 
+          item.id === itemId ? { ...item, quantity: parseInt(qty) || 0 } : item
+        ));
+      };
+
+      const resetImport = () => {
+        setImportText('');
+        setParsedItems([]);
+        setImportStep('paste');
+        setView('home');
+      };
+
+      const getCaliberTotal = (caliberId) => {
+        return inventory
+          .filter(item => item.caliber === caliberId)
+          .reduce((sum, item) => sum + item.quantity, 0);
+      };
+
+      const getCaliberProducts = (caliberId) => {
+        return inventory.filter(item => item.caliber === caliberId);
+      };
+
+      const handleAddProduct = () => {
+        if (!newProduct.brand || !newProduct.grainWeight) return;
+        
+        const product = {
+          id: Date.now(),
+          caliber: selectedCaliber,
+          brand: newProduct.brand,
+          grainWeight: parseInt(newProduct.grainWeight),
+          type: newProduct.type,
+          notes: newProduct.notes,
+          quantity: 0
+        };
+        
+        setInventory([...inventory, product]);
+        setNewProduct({ brand: '', grainWeight: '', type: 'FMJ', notes: '' });
+        setShowNewProduct(false);
+      };
+
+      const handleQuantityChange = (productId, amount) => {
+        const newInventory = inventory.map(item => 
+          item.id === productId 
+            ? { ...item, quantity: Math.max(0, item.quantity + amount) }
+            : item
+        );
+        setInventory(newInventory);
+        
+        if (selectedProduct && selectedProduct.id === productId) {
+          setSelectedProduct({
+            ...selectedProduct,
+            quantity: Math.max(0, selectedProduct.quantity + amount)
+          });
+        }
+        
+        const absAmount = Math.abs(amount);
+        if (amount > 0) {
+          setToast({ message: `+${absAmount} rounds added`, type: 'add' });
+        } else {
+          setToast({ message: `−${absAmount} rounds removed`, type: 'subtract' });
+        }
+        
+        setTimeout(() => setToast(null), 1500);
+      };
+
+      const handleDeleteProduct = (product) => {
+        setDeleteConfirm(product);
+      };
+
+      const confirmDelete = () => {
+        if (deleteConfirm) {
+          setInventory(inventory.filter(item => item.id !== deleteConfirm.id));
+          setToast({ message: `${deleteConfirm.brand} ${deleteConfirm.grainWeight ? deleteConfirm.grainWeight + 'gr' : ''} ${deleteConfirm.type} deleted`, type: 'subtract' });
+          setTimeout(() => setToast(null), 1500);
+          setDeleteConfirm(null);
+        }
+      };
+
+      const cancelDelete = () => {
+        setDeleteConfirm(null);
+      };
+
+      const handleQuickAction = (amount) => {
+        if (selectedProduct) {
+          const multiplier = view === 'subtract' ? -1 : 1;
+          handleQuantityChange(selectedProduct.id, amount * multiplier);
+        }
+      };
+
+      const handleCustomAction = () => {
+        const amount = parseInt(customQty);
+        if (amount && selectedProduct) {
+          const multiplier = view === 'subtract' ? -1 : 1;
+          handleQuantityChange(selectedProduct.id, amount * multiplier);
+          setCustomQty('');
+        }
+      };
+
+      const totalRounds = inventory.reduce((sum, item) => sum + item.quantity, 0);
+
+      if (isLoading) {
+        return (
+          <div style={styles.container}>
+            <div style={styles.loading}>Loading...</div>
+          </div>
+        );
+      }
+
+      // IMPORT VIEW
+      if (view === 'import') {
+        return (
+          <div style={styles.container}>
+            <header style={styles.subHeader}>
+              <button style={styles.backBtn} onClick={resetImport}>← Back</button>
+              <h1 style={styles.subTitle}>IMPORT ORDER</h1>
+            </header>
+
+            {importStep === 'paste' && (
+              <>
+                <div style={styles.importInstructions}>
+                  <p style={styles.instructionText}>
+                    <strong>How to import from Lucky Gunner:</strong>
+                  </p>
+                  <ol style={styles.instructionList}>
+                    <li>Open your order confirmation email</li>
+                    <li>Select and copy the email content</li>
+                    <li>Paste it below</li>
+                  </ol>
+                </div>
+                
+                <textarea
+                  style={styles.importTextarea}
+                  placeholder="Paste your Lucky Gunner order email here..."
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                  rows={10}
+                />
+                
+                <button 
+                  style={{...styles.actionBtn, ...styles.addBtn, width: '100%', marginTop: '16px'}}
+                  onClick={handleParseImport}
+                  disabled={!importText.trim()}
+                >
+                  Parse Order
+                </button>
+              </>
+            )}
+
+            {importStep === 'review' && (
+              <>
+                {parsedItems.length === 0 ? (
+                  <div style={styles.emptyState}>
+                    <p>No ammo products found in the text.</p>
+                    <p style={{fontSize: '14px', color: '#737373', marginTop: '8px'}}>
+                      Try copying more of the email content, including the product names and quantities.
+                    </p>
+                    <button style={styles.linkBtn} onClick={() => setImportStep('paste')}>
+                      ← Try again
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <p style={styles.instruction}>Found {parsedItems.length} item(s). Review and confirm:</p>
+                    
+                    <div style={styles.parsedList}>
+                      {parsedItems.map(item => {
+                        const caliberInfo = calibers.find(c => c.id === item.caliber);
+                        return (
+                          <div key={item.id} style={{
+                            ...styles.parsedItem,
+                            opacity: item.include ? 1 : 0.5,
+                            borderLeftColor: caliberInfo?.color || '#525252'
+                          }}>
+                            <div style={styles.parsedItemHeader}>
+                              <input
+                                type="checkbox"
+                                checked={item.include}
+                                onChange={() => handleToggleImportItem(item.id)}
+                                style={styles.checkbox}
+                              />
+                              <div style={styles.parsedItemInfo}>
+                                <div style={styles.parsedItemName}>
+                                  {item.brand} {item.grainWeight ? `${item.grainWeight}gr` : ''} {item.type}
+                                </div>
+                                <div style={styles.parsedItemCaliber}>
+                                  {item.caliberName}
+                                  {item.caliber === 'unknown' && (
+                                    <span style={styles.warningBadge}>Unknown caliber</span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div style={styles.parsedItemQty}>
+                              {item.needsQuantity ? (
+                                <input
+                                  type="number"
+                                  style={styles.qtyInputSmall}
+                                  placeholder="Qty"
+                                  value={item.quantity || ''}
+                                  onChange={(e) => handleUpdateImportItemQty(item.id, e.target.value)}
+                                />
+                              ) : (
+                                <span style={styles.parsedQtyValue}>{item.quantity} rds</span>
+                              )}
+                              {item.boxQty > 1 && (
+                                <span style={styles.boxInfo}>({item.boxQty} × {item.roundsPerBox})</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div style={styles.importActions}>
+                      <button style={styles.cancelBtn} onClick={() => setImportStep('paste')}>
+                        ← Back
+                      </button>
+                      <button 
+                        style={styles.saveBtn}
+                        onClick={handleConfirmImport}
+                        disabled={!parsedItems.some(i => i.include && i.caliber !== 'unknown')}
+                      >
+                        Add to Inventory
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+
+            {importStep === 'done' && (
+              <div style={styles.successState}>
+                <div style={styles.successIcon}>✓</div>
+                <p style={styles.successText}>Items added to inventory!</p>
+                <button 
+                  style={{...styles.actionBtn, ...styles.addBtn, marginTop: '24px'}}
+                  onClick={resetImport}
+                >
+                  Done
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      // HOME VIEW
+      if (view === 'home') {
+        return (
+          <div style={styles.container}>
+            <header style={styles.header}>
+              <h1 style={styles.title}>AMMO TRACKER</h1>
+              <div style={styles.totalBadge}>{totalRounds.toLocaleString()} rds</div>
+            </header>
+
+            <div style={styles.actionButtons}>
+              <button 
+                style={{...styles.actionBtn, ...styles.addBtn}}
+                onClick={() => setView('add')}
+              >
+                <span style={styles.actionIcon}>+</span>
+                <span>ADD</span>
+              </button>
+              <button 
+                style={{...styles.actionBtn, ...styles.subtractBtn}}
+                onClick={() => setView('subtract')}
+              >
+                <span style={styles.actionIcon}>−</span>
+                <span>SUBTRACT</span>
+              </button>
+            </div>
+
+            <button 
+              style={styles.importBtn}
+              onClick={() => setView('import')}
+            >
+              <span style={styles.importIcon}>📧</span>
+              Import from Lucky Gunner Order
+            </button>
+
+            <div style={styles.caliberList}>
+              {calibers.map(cal => {
+                const total = getCaliberTotal(cal.id);
+                const products = getCaliberProducts(cal.id);
+                return (
+                  <div 
+                    key={cal.id} 
+                    style={styles.caliberCard}
+                    onClick={() => { setSelectedCaliber(cal.id); setView('details'); }}
+                  >
+                    <div style={styles.caliberHeader}>
+                      <div style={{...styles.caliberDot, backgroundColor: cal.color}} />
+                      <span style={styles.caliberName}>{cal.name}</span>
+                    </div>
+                    <div style={styles.caliberStats}>
+                      <span style={styles.caliberTotal}>{total.toLocaleString()}</span>
+                      <span style={styles.caliberUnit}>rounds</span>
+                    </div>
+                    <div style={styles.caliberProducts}>
+                      {products.length === 0 
+                        ? <span style={styles.noProducts}>No products yet</span>
+                        : <span style={styles.productCount}>{products.length} product{products.length !== 1 ? 's' : ''}</span>
+                      }
+                    </div>
+                    <div style={styles.chevron}>›</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      }
+
+      // ADD or SUBTRACT VIEW - Step 1: Select Caliber
+      if ((view === 'add' || view === 'subtract') && !selectedCaliber) {
+        const isAdd = view === 'add';
+        return (
+          <div style={styles.container}>
+            <header style={styles.subHeader}>
+              <button style={styles.backBtn} onClick={() => setView('home')}>← Back</button>
+              <h1 style={styles.subTitle}>{isAdd ? 'ADD AMMO' : 'SUBTRACT AMMO'}</h1>
+            </header>
+
+            <p style={styles.instruction}>Select caliber:</p>
+
+            <div style={styles.caliberGrid}>
+              {calibers.map(cal => (
+                <button
+                  key={cal.id}
+                  style={{...styles.caliberBtn, borderColor: cal.color, color: cal.color}}
+                  onClick={() => setSelectedCaliber(cal.id)}
+                >
+                  {cal.name}
+                  <span style={styles.caliberBtnCount}>{getCaliberTotal(cal.id)} rds</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      // ADD or SUBTRACT VIEW - Step 2: Select Product
+      if ((view === 'add' || view === 'subtract') && selectedCaliber && !selectedProduct) {
+        const isAdd = view === 'add';
+        const products = getCaliberProducts(selectedCaliber);
+        const caliberInfo = calibers.find(c => c.id === selectedCaliber);
+
+        return (
+          <div style={styles.container}>
+            <header style={styles.subHeader}>
+              <button style={styles.backBtn} onClick={() => setSelectedCaliber(null)}>← Back</button>
+              <h1 style={styles.subTitle}>{caliberInfo.name}</h1>
+            </header>
+
+            <p style={styles.instruction}>Select product:</p>
+
+            {products.length > 0 && (
+              <div style={styles.productList}>
+                {products.map(product => (
+                  <button
+                    key={product.id}
+                    style={styles.productBtn}
+                    onClick={() => setSelectedProduct(product)}
+                  >
+                    <div style={styles.productInfo}>
+                      <span style={styles.productName}>{product.brand} {product.grainWeight ? `${product.grainWeight}gr` : ''} {product.type}</span>
+                      {product.notes && <span style={styles.productNotes}>{product.notes}</span>}
+                    </div>
+                    <span style={styles.productQty}>{product.quantity}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {isAdd && (
+              <>
+                {!showNewProduct ? (
+                  <button style={styles.newProductBtn} onClick={() => setShowNewProduct(true)}>
+                    + New Product
+                  </button>
+                ) : (
+                  <div style={styles.newProductForm}>
+                    <h3 style={styles.formTitle}>New Product</h3>
+                    <input
+                      style={styles.input}
+                      placeholder="Brand (e.g., Federal, PMC)"
+                      value={newProduct.brand}
+                      onChange={(e) => setNewProduct({...newProduct, brand: e.target.value})}
+                    />
+                    <input
+                      style={styles.input}
+                      placeholder="Grain weight (e.g., 55, 147)"
+                      type="number"
+                      value={newProduct.grainWeight}
+                      onChange={(e) => setNewProduct({...newProduct, grainWeight: e.target.value})}
+                    />
+                    <select
+                      style={styles.input}
+                      value={newProduct.type}
+                      onChange={(e) => setNewProduct({...newProduct, type: e.target.value})}
+                    >
+                      {ammoTypes.map(type => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                    <input
+                      style={styles.input}
+                      placeholder="Notes (optional)"
+                      value={newProduct.notes}
+                      onChange={(e) => setNewProduct({...newProduct, notes: e.target.value})}
+                    />
+                    <div style={styles.formButtons}>
+                      <button style={styles.cancelBtn} onClick={() => { setShowNewProduct(false); setNewProduct({ brand: '', grainWeight: '', type: 'FMJ', notes: '' }); }}>
+                        Cancel
+                      </button>
+                      <button 
+                        style={styles.saveBtn} 
+                        onClick={handleAddProduct}
+                        disabled={!newProduct.brand || !newProduct.grainWeight}
+                      >
+                        Create
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {!isAdd && products.length === 0 && (
+              <div style={styles.emptyState}>
+                <p>No products to subtract from.</p>
+                <button style={styles.linkBtn} onClick={() => setView('add')}>Add some first →</button>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      // ADD or SUBTRACT VIEW - Step 3: Enter Quantity
+      if ((view === 'add' || view === 'subtract') && selectedProduct) {
+        const isAdd = view === 'add';
+        const caliberInfo = calibers.find(c => c.id === selectedCaliber);
+        const caliberId = selectedCaliber;
+        const currentBoxSizes = boxSizes[caliberId] || [20, 50];
+
+        return (
+          <div style={styles.container}>
+            {toast && (
+              <div style={{
+                ...styles.toast,
+                backgroundColor: toast.type === 'add' ? '#166534' : '#991B1B',
+              }}>
+                {toast.message}
+              </div>
+            )}
+            
+            <header style={styles.subHeader}>
+              <button style={styles.backBtn} onClick={() => setSelectedProduct(null)}>← Back</button>
+              <h1 style={styles.subTitle}>{isAdd ? 'ADD' : 'SUBTRACT'}</h1>
+            </header>
+
+            <div style={styles.selectedProduct}>
+              <div style={{...styles.caliberDot, backgroundColor: caliberInfo.color}} />
+              <div>
+                <div style={styles.selectedName}>{selectedProduct.brand} {selectedProduct.grainWeight ? `${selectedProduct.grainWeight}gr` : ''} {selectedProduct.type}</div>
+                <div style={styles.selectedCaliber}>{caliberInfo.name}</div>
+              </div>
+            </div>
+
+            <div style={styles.currentQty}>
+              <span style={styles.currentLabel}>Current:</span>
+              <span style={styles.currentValue}>{selectedProduct.quantity.toLocaleString()} rounds</span>
+            </div>
+
+            {isAdd ? (
+              <>
+                <p style={styles.instruction}>Quick add:</p>
+                <div style={styles.quickGrid}>
+                  {quickAddAmounts.map(amount => (
+                    <button
+                      key={amount}
+                      style={{...styles.quickBtn, ...styles.quickAddBtn}}
+                      onClick={() => handleQuickAction(amount)}
+                    >
+                      +{amount}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <p style={styles.instruction}>Subtract by box:</p>
+                <div style={styles.boxGrid}>
+                  {currentBoxSizes.map(boxSize => {
+                    const boxCount = Math.floor(selectedProduct.quantity / boxSize);
+                    const canSubtract = selectedProduct.quantity >= boxSize;
+                    return (
+                      <button
+                        key={boxSize}
+                        style={{
+                          ...styles.boxBtn,
+                          opacity: canSubtract ? 1 : 0.4,
+                        }}
+                        onClick={() => handleQuickAction(boxSize)}
+                        disabled={!canSubtract}
+                      >
+                        <span style={styles.boxSize}>{boxSize} rd box</span>
+                        <span style={styles.boxCount}>{boxCount} available</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                
+                <p style={{...styles.instruction, marginTop: '24px'}}>Or enter exact amount:</p>
+              </>
+            )}
+
+            <div style={styles.customInput}>
+              <input
+                style={styles.qtyInput}
+                type="number"
+                placeholder={isAdd ? "Custom amount" : "Partial box / exact rounds"}
+                value={customQty}
+                onChange={(e) => setCustomQty(e.target.value)}
+              />
+              <button 
+                style={{...styles.customBtn, ...(isAdd ? styles.quickAddBtn : styles.quickSubBtn)}}
+                onClick={handleCustomAction}
+                disabled={!customQty || (!isAdd && parseInt(customQty) > selectedProduct.quantity)}
+              >
+                {isAdd ? 'ADD' : 'SUB'}
+              </button>
+            </div>
+
+            <button 
+              style={styles.doneBtn}
+              onClick={() => { setSelectedProduct(null); setSelectedCaliber(null); setView('home'); }}
+            >
+              Done
+            </button>
+          </div>
+        );
+      }
+
+      // DETAILS VIEW - Caliber breakdown
+      if (view === 'details' && selectedCaliber) {
+        const products = getCaliberProducts(selectedCaliber);
+        const caliberInfo = calibers.find(c => c.id === selectedCaliber);
+        const total = getCaliberTotal(selectedCaliber);
+
+        return (
+          <div style={styles.container}>
+            {toast && (
+              <div style={{
+                ...styles.toast,
+                backgroundColor: toast.type === 'add' ? '#166534' : '#991B1B',
+              }}>
+                {toast.message}
+              </div>
+            )}
+
+            {deleteConfirm && (
+              <div style={styles.modalOverlay} onClick={cancelDelete}>
+                <div style={styles.confirmModal} onClick={e => e.stopPropagation()}>
+                  <div style={styles.confirmTitle}>Delete Product?</div>
+                  <div style={styles.confirmMessage}>
+                    Are you sure you want to delete <strong>{deleteConfirm.brand} {deleteConfirm.grainWeight ? `${deleteConfirm.grainWeight}gr` : ''} {deleteConfirm.type}</strong>?
+                    <br /><br />
+                    This will remove <span style={{color: '#F59E0B', fontWeight: '700'}}>{deleteConfirm.quantity} rounds</span> from your inventory.
+                  </div>
+                  <div style={styles.confirmButtons}>
+                    <button style={styles.confirmCancel} onClick={cancelDelete}>
+                      Cancel
+                    </button>
+                    <button style={styles.confirmDelete} onClick={confirmDelete}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <header style={styles.subHeader}>
+              <button style={styles.backBtn} onClick={() => { setSelectedCaliber(null); setView('home'); }}>← Back</button>
+              <h1 style={{...styles.subTitle, color: caliberInfo.color}}>{caliberInfo.name}</h1>
+            </header>
+
+            <div style={styles.detailsTotal}>
+              <span style={styles.detailsTotalValue}>{total.toLocaleString()}</span>
+              <span style={styles.detailsTotalLabel}>total rounds</span>
+            </div>
+
+            {products.length === 0 ? (
+              <div style={styles.emptyState}>
+                <p>No products yet for {caliberInfo.name}</p>
+                <button 
+                  style={styles.linkBtn} 
+                  onClick={() => { setView('add'); }}
+                >
+                  Add your first product →
+                </button>
+              </div>
+            ) : (
+              <div style={styles.detailsList}>
+                {products.map(product => (
+                  <div key={product.id} style={styles.detailCard}>
+                    <div style={styles.detailInfo}>
+                      <div style={styles.detailName}>{product.brand} {product.grainWeight ? `${product.grainWeight}gr` : ''} {product.type}</div>
+                      {product.notes && <div style={styles.detailNotes}>{product.notes}</div>}
+                    </div>
+                    <div style={styles.detailQty}>{product.quantity.toLocaleString()}</div>
+                    <div style={styles.detailActions}>
+                      <button 
+                        style={styles.miniBtn}
+                        onClick={() => { setSelectedProduct(product); setView('add'); }}
+                      >+</button>
+                      <button 
+                        style={styles.miniBtn}
+                        onClick={() => { setSelectedProduct(product); setView('subtract'); }}
+                      >−</button>
+                      <button 
+                        style={{...styles.miniBtn, ...styles.deleteBtn}}
+                        onClick={() => handleDeleteProduct(product)}
+                      >×</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={styles.detailFooter}>
+              <button 
+                style={{...styles.actionBtn, ...styles.addBtn, flex: 1}}
+                onClick={() => setView('add')}
+              >
+                + Add
+              </button>
+              <button 
+                style={{...styles.actionBtn, ...styles.subtractBtn, flex: 1}}
+                onClick={() => setView('subtract')}
+              >
+                − Subtract
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      return null;
+    };
+
+    const styles = {
+      container: {
+        minHeight: '100vh',
+        backgroundColor: '#0A0A0A',
+        color: '#E5E5E5',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif',
+        padding: '16px',
+        paddingBottom: '100px',
+        maxWidth: '500px',
+        margin: '0 auto',
+      },
+      loading: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        fontSize: '18px',
+        color: '#737373',
+      },
+      header: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: '24px',
+        paddingTop: '8px',
+      },
+      title: {
+        fontSize: '24px',
+        fontWeight: '700',
+        color: '#FFFFFF',
+        margin: 0,
+        letterSpacing: '1px',
+      },
+      totalBadge: {
+        backgroundColor: '#1F1F1F',
+        padding: '8px 16px',
+        borderRadius: '20px',
+        fontSize: '14px',
+        fontWeight: '600',
+        color: '#F59E0B',
+      },
+      actionButtons: {
+        display: 'flex',
+        gap: '12px',
+        marginBottom: '16px',
+      },
+      actionBtn: {
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+        borderRadius: '16px',
+        border: 'none',
+        fontSize: '16px',
+        fontWeight: '700',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        gap: '4px',
+      },
+      addBtn: {
+        backgroundColor: '#166534',
+        color: '#FFFFFF',
+      },
+      subtractBtn: {
+        backgroundColor: '#991B1B',
+        color: '#FFFFFF',
+      },
+      actionIcon: {
+        fontSize: '28px',
+        fontWeight: '300',
+      },
+      importBtn: {
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '10px',
+        padding: '14px 20px',
+        backgroundColor: '#1F1F1F',
+        border: '1px dashed #333',
+        borderRadius: '12px',
+        color: '#A3A3A3',
+        fontSize: '14px',
+        fontWeight: '500',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        marginBottom: '24px',
+      },
+      importIcon: {
+        fontSize: '18px',
+      },
+      caliberList: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
+      },
+      caliberCard: {
+        backgroundColor: '#171717',
+        borderRadius: '16px',
+        padding: '20px',
+        display: 'flex',
+        alignItems: 'center',
+        cursor: 'pointer',
+        position: 'relative',
+      },
+      caliberHeader: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+        flex: 1,
+      },
+      caliberDot: {
+        width: '12px',
+        height: '12px',
+        borderRadius: '50%',
+      },
+      caliberName: {
+        fontSize: '18px',
+        fontWeight: '600',
+      },
+      caliberStats: {
+        textAlign: 'right',
+        marginRight: '16px',
+      },
+      caliberTotal: {
+        fontSize: '24px',
+        fontWeight: '700',
+        color: '#FFFFFF',
+        display: 'block',
+      },
+      caliberUnit: {
+        fontSize: '12px',
+        color: '#737373',
+      },
+      caliberProducts: {
+        position: 'absolute',
+        bottom: '8px',
+        left: '44px',
+      },
+      noProducts: {
+        fontSize: '11px',
+        color: '#525252',
+      },
+      productCount: {
+        fontSize: '11px',
+        color: '#737373',
+      },
+      chevron: {
+        fontSize: '24px',
+        color: '#525252',
+      },
+      subHeader: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '16px',
+        marginBottom: '24px',
+        paddingTop: '8px',
+      },
+      backBtn: {
+        background: 'none',
+        border: 'none',
+        color: '#3B82F6',
+        fontSize: '16px',
+        cursor: 'pointer',
+        padding: '8px 0',
+        fontFamily: 'inherit',
+      },
+      subTitle: {
+        fontSize: '20px',
+        fontWeight: '700',
+        color: '#FFFFFF',
+        margin: 0,
+      },
+      instruction: {
+        fontSize: '14px',
+        color: '#737373',
+        marginBottom: '16px',
+      },
+      caliberGrid: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(2, 1fr)',
+        gap: '12px',
+      },
+      caliberBtn: {
+        backgroundColor: '#171717',
+        border: '2px solid',
+        borderRadius: '16px',
+        padding: '24px 16px',
+        fontSize: '18px',
+        fontWeight: '700',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '8px',
+      },
+      caliberBtnCount: {
+        fontSize: '12px',
+        opacity: 0.7,
+        fontWeight: '500',
+      },
+      productList: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+        marginBottom: '16px',
+      },
+      productBtn: {
+        backgroundColor: '#171717',
+        border: 'none',
+        borderRadius: '12px',
+        padding: '16px',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        textAlign: 'left',
+      },
+      productInfo: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '4px',
+      },
+      productName: {
+        fontSize: '16px',
+        fontWeight: '600',
+        color: '#FFFFFF',
+      },
+      productNotes: {
+        fontSize: '12px',
+        color: '#737373',
+      },
+      productQty: {
+        fontSize: '20px',
+        fontWeight: '700',
+        color: '#F59E0B',
+      },
+      newProductBtn: {
+        width: '100%',
+        backgroundColor: 'transparent',
+        border: '2px dashed #333',
+        borderRadius: '12px',
+        padding: '16px',
+        color: '#737373',
+        fontSize: '16px',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      },
+      newProductForm: {
+        backgroundColor: '#171717',
+        borderRadius: '16px',
+        padding: '20px',
+      },
+      formTitle: {
+        fontSize: '16px',
+        fontWeight: '600',
+        color: '#FFFFFF',
+        marginTop: 0,
+        marginBottom: '16px',
+      },
+      input: {
+        width: '100%',
+        backgroundColor: '#0A0A0A',
+        border: '1px solid #333',
+        borderRadius: '10px',
+        padding: '14px 16px',
+        fontSize: '16px',
+        color: '#FFFFFF',
+        marginBottom: '12px',
+        fontFamily: 'inherit',
+        boxSizing: 'border-box',
+      },
+      formButtons: {
+        display: 'flex',
+        gap: '12px',
+        marginTop: '8px',
+      },
+      cancelBtn: {
+        flex: 1,
+        backgroundColor: '#262626',
+        border: 'none',
+        borderRadius: '10px',
+        padding: '14px',
+        color: '#FFFFFF',
+        fontSize: '16px',
+        fontWeight: '600',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      },
+      saveBtn: {
+        flex: 1,
+        backgroundColor: '#3B82F6',
+        border: 'none',
+        borderRadius: '10px',
+        padding: '14px',
+        color: '#FFFFFF',
+        fontSize: '16px',
+        fontWeight: '600',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      },
+      emptyState: {
+        textAlign: 'center',
+        padding: '40px 20px',
+        color: '#737373',
+      },
+      linkBtn: {
+        background: 'none',
+        border: 'none',
+        color: '#3B82F6',
+        fontSize: '16px',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        marginTop: '8px',
+      },
+      selectedProduct: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '16px',
+        backgroundColor: '#171717',
+        borderRadius: '16px',
+        padding: '20px',
+        marginBottom: '20px',
+      },
+      selectedName: {
+        fontSize: '18px',
+        fontWeight: '600',
+        color: '#FFFFFF',
+      },
+      selectedCaliber: {
+        fontSize: '14px',
+        color: '#737373',
+      },
+      currentQty: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: '24px',
+        padding: '16px 20px',
+        backgroundColor: '#1F1F1F',
+        borderRadius: '12px',
+      },
+      currentLabel: {
+        fontSize: '14px',
+        color: '#737373',
+      },
+      currentValue: {
+        fontSize: '20px',
+        fontWeight: '700',
+        color: '#F59E0B',
+      },
+      quickGrid: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(3, 1fr)',
+        gap: '10px',
+        marginBottom: '20px',
+      },
+      boxGrid: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
+        marginBottom: '8px',
+      },
+      boxBtn: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: '#7F1D1D',
+        border: 'none',
+        borderRadius: '12px',
+        padding: '18px 20px',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      },
+      boxSize: {
+        fontSize: '18px',
+        fontWeight: '700',
+        color: '#FFFFFF',
+      },
+      boxCount: {
+        fontSize: '14px',
+        color: '#FCA5A5',
+      },
+      quickBtn: {
+        border: 'none',
+        borderRadius: '12px',
+        padding: '18px 12px',
+        fontSize: '18px',
+        fontWeight: '700',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      },
+      quickAddBtn: {
+        backgroundColor: '#166534',
+        color: '#FFFFFF',
+      },
+      quickSubBtn: {
+        backgroundColor: '#991B1B',
+        color: '#FFFFFF',
+      },
+      customInput: {
+        display: 'flex',
+        gap: '12px',
+        marginBottom: '24px',
+      },
+      qtyInput: {
+        flex: 1,
+        backgroundColor: '#171717',
+        border: '1px solid #333',
+        borderRadius: '12px',
+        padding: '16px',
+        fontSize: '18px',
+        color: '#FFFFFF',
+        fontFamily: 'inherit',
+      },
+      customBtn: {
+        border: 'none',
+        borderRadius: '12px',
+        padding: '16px 24px',
+        fontSize: '16px',
+        fontWeight: '700',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      },
+      doneBtn: {
+        width: '100%',
+        backgroundColor: '#262626',
+        border: 'none',
+        borderRadius: '12px',
+        padding: '18px',
+        color: '#FFFFFF',
+        fontSize: '18px',
+        fontWeight: '600',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      },
+      toast: {
+        position: 'fixed',
+        top: '20px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        padding: '14px 28px',
+        borderRadius: '12px',
+        color: '#FFFFFF',
+        fontSize: '16px',
+        fontWeight: '600',
+        zIndex: 1000,
+        animation: 'slideDown 0.2s ease',
+        boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+      },
+      modalOverlay: {
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '20px',
+      },
+      confirmModal: {
+        backgroundColor: '#1F1F1F',
+        borderRadius: '16px',
+        padding: '24px',
+        maxWidth: '340px',
+        width: '100%',
+      },
+      confirmTitle: {
+        fontSize: '20px',
+        fontWeight: '700',
+        color: '#FFFFFF',
+        marginBottom: '16px',
+      },
+      confirmMessage: {
+        fontSize: '15px',
+        color: '#A3A3A3',
+        lineHeight: '1.5',
+        marginBottom: '24px',
+      },
+      confirmButtons: {
+        display: 'flex',
+        gap: '12px',
+      },
+      confirmCancel: {
+        flex: 1,
+        backgroundColor: '#333',
+        border: 'none',
+        borderRadius: '10px',
+        padding: '14px',
+        color: '#FFFFFF',
+        fontSize: '16px',
+        fontWeight: '600',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      },
+      confirmDelete: {
+        flex: 1,
+        backgroundColor: '#DC2626',
+        border: 'none',
+        borderRadius: '10px',
+        padding: '14px',
+        color: '#FFFFFF',
+        fontSize: '16px',
+        fontWeight: '600',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      },
+      detailsTotal: {
+        textAlign: 'center',
+        marginBottom: '24px',
+        padding: '24px',
+        backgroundColor: '#171717',
+        borderRadius: '16px',
+      },
+      detailsTotalValue: {
+        fontSize: '48px',
+        fontWeight: '700',
+        color: '#FFFFFF',
+        display: 'block',
+      },
+      detailsTotalLabel: {
+        fontSize: '14px',
+        color: '#737373',
+      },
+      detailsList: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
+      },
+      detailCard: {
+        backgroundColor: '#171717',
+        borderRadius: '12px',
+        padding: '16px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+      },
+      detailInfo: {
+        flex: 1,
+      },
+      detailName: {
+        fontSize: '16px',
+        fontWeight: '600',
+        color: '#FFFFFF',
+      },
+      detailNotes: {
+        fontSize: '12px',
+        color: '#737373',
+        marginTop: '4px',
+      },
+      detailQty: {
+        fontSize: '20px',
+        fontWeight: '700',
+        color: '#F59E0B',
+        minWidth: '70px',
+        textAlign: 'right',
+      },
+      detailActions: {
+        display: 'flex',
+        gap: '8px',
+      },
+      miniBtn: {
+        width: '36px',
+        height: '36px',
+        borderRadius: '8px',
+        border: 'none',
+        backgroundColor: '#262626',
+        color: '#FFFFFF',
+        fontSize: '20px',
+        fontWeight: '500',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      },
+      deleteBtn: {
+        backgroundColor: '#7F1D1D',
+        color: '#FCA5A5',
+      },
+      detailFooter: {
+        display: 'flex',
+        gap: '12px',
+        marginTop: '24px',
+        position: 'fixed',
+        bottom: '20px',
+        left: '16px',
+        right: '16px',
+        maxWidth: '468px',
+        margin: '0 auto',
+      },
+      importInstructions: {
+        backgroundColor: '#171717',
+        borderRadius: '12px',
+        padding: '20px',
+        marginBottom: '20px',
+      },
+      instructionText: {
+        margin: '0 0 12px 0',
+        color: '#FFFFFF',
+      },
+      instructionList: {
+        margin: 0,
+        paddingLeft: '20px',
+        color: '#A3A3A3',
+        fontSize: '14px',
+        lineHeight: '1.8',
+      },
+      importTextarea: {
+        width: '100%',
+        backgroundColor: '#171717',
+        border: '1px solid #333',
+        borderRadius: '12px',
+        padding: '16px',
+        fontSize: '14px',
+        color: '#FFFFFF',
+        fontFamily: 'inherit',
+        resize: 'vertical',
+        minHeight: '200px',
+        boxSizing: 'border-box',
+      },
+      parsedList: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
+        marginBottom: '20px',
+      },
+      parsedItem: {
+        backgroundColor: '#171717',
+        borderRadius: '12px',
+        padding: '16px',
+        borderLeft: '4px solid',
+      },
+      parsedItemHeader: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: '12px',
+      },
+      checkbox: {
+        width: '20px',
+        height: '20px',
+        marginTop: '2px',
+      },
+      parsedItemInfo: {
+        flex: 1,
+      },
+      parsedItemName: {
+        fontSize: '16px',
+        fontWeight: '600',
+        color: '#FFFFFF',
+      },
+      parsedItemCaliber: {
+        fontSize: '13px',
+        color: '#737373',
+        marginTop: '4px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+      },
+      warningBadge: {
+        backgroundColor: '#78350F',
+        color: '#FCD34D',
+        fontSize: '10px',
+        padding: '2px 6px',
+        borderRadius: '4px',
+      },
+      parsedItemQty: {
+        marginTop: '12px',
+        marginLeft: '32px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+      },
+      parsedQtyValue: {
+        fontSize: '18px',
+        fontWeight: '700',
+        color: '#F59E0B',
+      },
+      boxInfo: {
+        fontSize: '12px',
+        color: '#737373',
+      },
+      qtyInputSmall: {
+        width: '100px',
+        backgroundColor: '#0A0A0A',
+        border: '1px solid #333',
+        borderRadius: '8px',
+        padding: '10px 12px',
+        fontSize: '16px',
+        color: '#FFFFFF',
+        fontFamily: 'inherit',
+      },
+      importActions: {
+        display: 'flex',
+        gap: '12px',
+      },
+      successState: {
+        textAlign: 'center',
+        padding: '60px 20px',
+      },
+      successIcon: {
+        width: '80px',
+        height: '80px',
+        borderRadius: '50%',
+        backgroundColor: '#166534',
+        color: '#FFFFFF',
+        fontSize: '40px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        margin: '0 auto 24px',
+      },
+      successText: {
+        fontSize: '20px',
+        fontWeight: '600',
+        color: '#FFFFFF',
+        margin: 0,
+      },
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<AmmoTracker />);
+  </script>
+</body>
+</html>
