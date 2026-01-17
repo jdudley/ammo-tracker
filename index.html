@@ -667,6 +667,7 @@
               {calibers.map(cal => {
                 const total = getCaliberTotal(cal.id);
                 const products = getCaliberProducts(cal.id);
+                const isLow = total > 0 && total <= 50;
                 return (
                   <div 
                     key={cal.id} 
@@ -676,9 +677,10 @@
                     <div style={styles.caliberHeader}>
                       <div style={{...styles.caliberDot, backgroundColor: cal.color}} />
                       <span style={styles.caliberName}>{cal.name}</span>
+                      {isLow && <span style={styles.lowAmmoAlert}>⚠️ Low</span>}
                     </div>
                     <div style={styles.caliberStats}>
-                      <span style={styles.caliberTotal}>{total.toLocaleString()}</span>
+                      <span style={{...styles.caliberTotal, color: isLow ? '#F59E0B' : '#FFFFFF'}}>{total.toLocaleString()}</span>
                       <span style={styles.caliberUnit}>rounds</span>
                     </div>
                     <div style={styles.caliberProducts}>
@@ -1161,6 +1163,15 @@
       },
       caliberName: {
         fontSize: '18px',
+        fontWeight: '600',
+      },
+      lowAmmoAlert: {
+        fontSize: '11px',
+        backgroundColor: '#78350F',
+        color: '#FCD34D',
+        padding: '2px 8px',
+        borderRadius: '6px',
+        marginLeft: '8px',
         fontWeight: '600',
       },
       caliberStats: {
